@@ -34,11 +34,10 @@ impl History {
         self.undo.last().map_or(ROOT, |s| s.id)
     }
 
-    pub fn mark_saved(&mut self) {
-        self.saved = self.state();
-        if let Some(last) = self.undo.last_mut() {
-            last.open = false;
-        }
+    /// marks a state as what is on disk. it may be an older state than
+    /// now, when a save took its snapshot before more edits came in.
+    pub fn mark_saved(&mut self, state: u64) {
+        self.saved = state;
     }
 
     pub fn is_saved(&self) -> bool {

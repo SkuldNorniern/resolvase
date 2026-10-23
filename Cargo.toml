@@ -7,3 +7,4 @@ description = "headless text engine: piece tree, checked edits, undo, snapshots"
 repository = "https://github.com/SkuldNorniern/resolvase"
 
 [dependencies]
+unicode-segmentation = "1.12"

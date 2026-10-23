@@ -23,7 +23,7 @@ mod piece_tree;
 mod position;
 mod snapshot;
 
-pub use buffer::{TextBuffer, Transaction};
+pub use buffer::{SavePoint, TextBuffer, Transaction};
 pub use edit::{Anchor, Bias, Change, ChangeSet};
 pub use error::Error;
 pub use piece_tree::Chunks;

@@ -108,10 +108,108 @@ impl TextSnapshot {
     }
 }
 
+/// bytes of context read on each side when looking for a grapheme edge.
+/// doubles until the edge is found inside the window.
+const GRAPHEME_WINDOW: usize = 64;
+
+impl TextSnapshot {
+    /// start of the next grapheme after `offset`, or none at the end.
+    /// cursor moves step by these, so `e` + combining accent or a family
+    /// emoji is one step, and so is `\r\n`.
+    ///
+    /// # Errors
+    ///
+    /// `offset` is past the end or splits a char.
+    pub fn next_grapheme(&self, offset: usize) -> Result<Option<usize>, Error> {
+        self.check_offset(offset)?;
+        self.grapheme_edge(offset, true)
+    }
+
+    /// start of the grapheme before `offset`, or none at the start.
+    ///
+    /// # Errors
+    ///
+    /// `offset` is past the end or splits a char.
+    pub fn prev_grapheme(&self, offset: usize) -> Result<Option<usize>, Error> {
+        self.check_offset(offset)?;
+        self.grapheme_edge(offset, false)
+    }
+
+    fn grapheme_edge(&self, offset: usize, forward: bool) -> Result<Option<usize>, Error> {
+        use unicode_segmentation::GraphemeCursor;
+
+        let mut reach = GRAPHEME_WINDOW;
+        loop {
+            let mut start = offset.saturating_sub(reach);
+            while !self.tree.is_char_boundary(start) {
+                start -= 1;
+            }
+            let mut end = (offset + reach).min(self.len());
+            while !self.tree.is_char_boundary(end) {
+                end += 1;
+            }
+            let window = self.slice(start..end)?;
+            let at_start = start == 0;
+            let at_end = end == self.len();
+            let mut cursor = GraphemeCursor::new(offset - start, window.len(), true);
+            let found = if forward {
+                cursor.next_boundary(&window, 0)
+            } else {
+                cursor.prev_boundary(&window, 0)
+            };
+            // an edge on the window rim can move with more text, unless the
+            // rim is also the end of the text
+            let trusted = |at: usize| (at > 0 || at_start) && (at < window.len() || at_end);
+            match found {
+                Ok(Some(at)) if trusted(at) => return Ok(Some(start + at)),
+                Ok(None) if (forward && at_end) || (!forward && at_start) => return Ok(None),
+                // the whole text gave no answer; can't happen, but never loop
+                _ if at_start && at_end => return Ok(None),
+                _ => reach *= 2,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::piece_tree::Tree;
+
+    #[test]
+    fn graphemes_step_whole_clusters() {
+        // e + combining acute, family emoji (zwj), crlf, korean jamo-free syllable
+        let text = "e\u{301}👨‍👩‍👧\r\n가x";
+        let s = snap(text);
+        let mut at = 0;
+        let mut edges = vec![0];
+        while let Some(next) = s.next_grapheme(at).unwrap() {
+            edges.push(next);
+            at = next;
+        }
+        let e = 3;
+        let family = e + "👨‍👩‍👧".len();
+        let crlf = family + 2;
+        assert_eq!(edges, [0, e, family, crlf, crlf + 3, crlf + 4]);
+        let mut back = vec![text.len()];
+        let mut at = text.len();
+        while let Some(prev) = s.prev_grapheme(at).unwrap() {
+            back.push(prev);
+            at = prev;
+        }
+        back.reverse();
+        assert_eq!(back, edges);
+    }
+
+    #[test]
+    fn long_cluster_grows_the_window() {
+        let text = format!("a{}b", "\u{301}".repeat(200));
+        let s = snap(&text);
+        assert_eq!(s.next_grapheme(0), Ok(Some(text.len() - 1)));
+        assert_eq!(s.prev_grapheme(text.len() - 1), Ok(Some(0)));
+        assert_eq!(s.next_grapheme(text.len()), Ok(None));
+        assert_eq!(s.prev_grapheme(0), Ok(None));
+    }
 
     fn snap(text: &str) -> TextSnapshot {
         TextSnapshot {

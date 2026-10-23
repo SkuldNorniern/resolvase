@@ -5,6 +5,10 @@ use crate::history::History;
 use crate::piece_tree::Tree;
 use crate::{Error, Revision, TextSnapshot};
 
+/// a state of a buffer's history, from [`TextBuffer::save_point`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SavePoint(u64);
+
 /// editable text with undo. one owner; hand out [`TextSnapshot`]s to readers.
 #[derive(Clone, Debug, Default)]
 pub struct TextBuffer {
@@ -110,7 +114,21 @@ impl TextBuffer {
 
     /// marks the current state as what is on disk.
     pub fn mark_saved(&mut self) {
-        self.history.mark_saved();
+        let point = self.save_point();
+        self.mark_saved_at(point);
+    }
+
+    /// the current state, for a save that writes a snapshot on another
+    /// thread. ends a typing run, so later typing is a new undo step.
+    pub fn save_point(&mut self) -> SavePoint {
+        self.history.close();
+        SavePoint(self.history.state())
+    }
+
+    /// marks `point` as what is on disk once its write is done. edits made
+    /// meanwhile keep the buffer unsaved.
+    pub fn mark_saved_at(&mut self, point: SavePoint) {
+        self.history.mark_saved(point.0);
     }
 
     /// true when undo/redo/edits brought the text back to the saved state.
@@ -358,6 +376,31 @@ mod tests {
         buffer.insert(0, "x").unwrap();
         buffer.undo();
         assert!(!buffer.is_saved());
+    }
+
+    #[test]
+    fn save_point_from_before_later_edits() {
+        let mut buffer = TextBuffer::new();
+        buffer
+            .transaction()
+            .insert(0, "a")
+            .join(true)
+            .commit()
+            .unwrap();
+        let point = buffer.save_point();
+        let snapshot = buffer.snapshot();
+        buffer
+            .transaction()
+            .insert(1, "b")
+            .join(true)
+            .commit()
+            .unwrap();
+        // the write of `snapshot` finishes now
+        buffer.mark_saved_at(point);
+        assert_eq!(snapshot.to_string(), "a");
+        assert!(!buffer.is_saved());
+        buffer.undo();
+        assert!(buffer.is_saved(), "typing after the point was a new step");
     }
 
     #[test]
