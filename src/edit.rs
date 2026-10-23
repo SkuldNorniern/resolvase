@@ -33,17 +33,11 @@ impl Change {
             offset
         } else if offset > end {
             offset - (end - start) + self.inserted.len()
-        } else if start == end {
-            // pure insert at this spot, bias picks the side
-            match bias {
-                Bias::Left => start,
-                Bias::Right => new_end,
-            }
-        } else if offset == start {
-            start
-        } else if offset == end {
+        } else if offset == end && offset != start {
+            // just past the replaced text stays just past the new text
             new_end
         } else {
+            // at the start or inside: bias picks the side of the new text
             match bias {
                 Bias::Left => start,
                 Bias::Right => new_end,
@@ -141,7 +135,8 @@ mod tests {
     fn replace_collapses_inside() {
         // "abcdef" -> "aZf"
         let s = set(vec![change(1..5, "bcde", "Z")]);
-        assert_eq!(s.map(1, Bias::Right), 1);
+        assert_eq!(s.map(1, Bias::Left), 1);
+        assert_eq!(s.map(1, Bias::Right), 2);
         assert_eq!(s.map(3, Bias::Left), 1);
         assert_eq!(s.map(3, Bias::Right), 2);
         assert_eq!(s.map(5, Bias::Left), 2);
