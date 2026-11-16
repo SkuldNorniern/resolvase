@@ -73,6 +73,19 @@ impl TextSnapshot {
         Ok(out)
     }
 
+    /// every line, first to last, with the byte it starts at and its text
+    /// without the `\n`: one walk over the text, no lookup per line. a text
+    /// ending in `\n` ends with an empty line, as [`TextSnapshot::line_count`]
+    /// counts it.
+    pub fn lines(&self) -> Lines<'_> {
+        Lines {
+            chunks: self.tree.chunks(0..self.len()),
+            rest: "",
+            at: 0,
+            done: false,
+        }
+    }
+
     /// line holding `offset`, from 0.
     ///
     /// # Errors
@@ -143,6 +156,59 @@ impl TextSnapshot {
     }
 }
 
+/// the lines of a snapshot; see [`TextSnapshot::lines`].
+pub struct Lines<'a> {
+    chunks: Chunks<'a>,
+    rest: &'a str,
+    at: usize,
+    done: bool,
+}
+
+impl Iterator for Lines<'_> {
+    type Item = (usize, String);
+
+    fn next(&mut self) -> Option<(usize, String)> {
+        if self.done {
+            return None;
+        }
+        let start = self.at;
+        let mut line = String::new();
+        loop {
+            if self.rest.is_empty() {
+                match self.chunks.next() {
+                    Some(chunk) => self.rest = chunk,
+                    None => {
+                        self.done = true;
+                        return Some((start, line));
+                    }
+                }
+            }
+            match self.rest.find('\n') {
+                Some(i) => {
+                    line.push_str(&self.rest[..i]);
+                    self.rest = &self.rest[i + 1..];
+                    self.at += i + 1;
+                    return Some((start, line));
+                }
+                None => {
+                    line.push_str(self.rest);
+                    self.at += self.rest.len();
+                    self.rest = "";
+                }
+            }
+        }
+    }
+}
+
+/// the whole text in one string, sized once.
+impl From<&TextSnapshot> for String {
+    fn from(text: &TextSnapshot) -> String {
+        let mut out = String::with_capacity(text.len());
+        out.extend(text.tree.chunks(0..text.len()));
+        out
+    }
+}
+
 impl fmt::Display for TextSnapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.tree
@@ -160,6 +226,31 @@ mod tests {
             tree: Tree::from_text(text),
             revision: Revision::default(),
         }
+    }
+
+    #[test]
+    fn lines_match_line_ranges() {
+        for text in ["", "a", "a\n", "\n\n", "one\ntwo\r\nthree", "가\n나다\n"] {
+            let s = snap(text);
+            let walked: Vec<(usize, String)> = s.lines().collect();
+            assert_eq!(walked.len(), s.line_count(), "{text:?}");
+            for (line, (start, got)) in walked.iter().enumerate() {
+                let range = s.line_range(line).unwrap();
+                assert_eq!(*start, range.start, "{text:?} line {line}");
+                assert_eq!(got, &s.slice(range).unwrap(), "{text:?} line {line}");
+            }
+            assert_eq!(String::from(&s), text);
+        }
+        // lines that run across many pieces
+        let big: String = (0..3000)
+            .map(|i| format!("line {i} {}\n", "x".repeat(i % 97)))
+            .collect();
+        let s = snap(&big);
+        assert_eq!(s.lines().count(), s.line_count());
+        let (start, last_full) = s.lines().nth(2999).unwrap();
+        assert_eq!(start, s.line_start(2999).unwrap());
+        assert_eq!(last_full, s.slice(s.line_range(2999).unwrap()).unwrap());
+        assert_eq!(String::from(&s), big);
     }
 
     #[test]

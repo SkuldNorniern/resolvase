@@ -28,4 +28,4 @@ pub use edit::{Anchor, Bias, Change, ChangeSet};
 pub use error::Error;
 pub use piece_tree::Chunks;
 pub use position::{Encoding, Point};
-pub use snapshot::{Revision, TextSnapshot};
+pub use snapshot::{Lines, Revision, TextSnapshot};
